@@ -27,11 +27,6 @@ const jobs = {
                     let requestLength = 100 * (Math.floor(Math.random() * 4) + 1);
                     setTimeout(async () => {
                         const requestId = v4();
-                        //console.log(
-                            //"Upload ID:  %s, Request ID: %s", 
-                            //uploadId, 
-                            //requestId
-                        //);
                         await redis.hset(`mc-worker-queue:${uploadId}`, requestId, 0);
                         await queue.enqueue(
                             "get-request-status", 
@@ -55,13 +50,7 @@ const jobs = {
             }
         },
         perform: async (uploadId, requestId) => {
-            //console.log('---------------------------------------------------');
             try {
-                //console.log(`
-                    //Polling...
-                    //requestId = ${requestId}
-                    //uploadId = ${uploadId}
-                //`);
                 let requestLength = 100 * (Math.floor(Math.random() * 4) + 1);
                 let apiHit = Math.floor(Math.random() * 100) + 1;
                 const requestProcessed = await new Promise((resolve) => {
@@ -71,7 +60,6 @@ const jobs = {
                     }, requestLength);
                 });
 
-                //console.log(`Request ID: ${requestId}, requestProcessed: ${requestProcessed}`);
                 if (requestProcessed) {
                     await redis.hset(`mc-worker-queue:${uploadId}`, requestId, 1);
                     return requestProcessed;
@@ -111,9 +99,7 @@ const multiWorker = new NR.MultiWorker(
 
 async function checkUploadCompletion(uploadId) {
     const workerQueueHash = await redis.hgetall(`mc-worker-queue:${uploadId}`);
-    console.log("workerQueueHash: ", workerQueueHash);
     const requestStatuses = Object.values(workerQueueHash);
-    //console.log("requestStatuses: ", requestStatuses);
     let allComplete = true;
     for (const reqStat of requestStatuses) {
         if (reqStat === '0') {
@@ -131,18 +117,15 @@ async function checkUploadCompletion(uploadId) {
 
 async function main() {
     multiWorker.on("reEnqueue", async (workerId, queue, job, plugin) => {
-        //console.log("---------------------------------------------------");
         console.log(`
             worker[${workerId}]
             REENQUEUE: ${queue}
             job.args: ${JSON.stringify(job.args)}
             plugin: ${JSON.stringify(plugin)}
         `);
-        //console.log("---------------------------------------------------");
     });
 
     multiWorker.on("failure", async (workerId, queue, job, _failure, duration) => {
-        //console.log("---------------------------------------------------");
         console.log(`
             worker[${workerId}]
             job.args: ${JSON.stringify(job.args)}
@@ -153,11 +136,9 @@ async function main() {
             await redis.hset(`mc-worker-queue:${job.args[0]}`, `${job.args[1]}`, -1);
             await checkUploadCompletion(job.args[0]);
         }
-        //console.log("---------------------------------------------------");
     });
 
     multiWorker.on("success", async (workerId, queue, job, result, duration) => {
-        //console.log("---------------------------------------------------");
         console.log(`
             worker[${workerId}]
             job.args: ${JSON.stringify(job.args)}
@@ -168,7 +149,6 @@ async function main() {
             await redis.hset(`mc-worker-queue:${job.args[0]}`, `${job.args[1]}`, 1);
             await checkUploadCompletion(job.args[0]);
         }
-        //console.log("---------------------------------------------------");
     });
     
     try {
