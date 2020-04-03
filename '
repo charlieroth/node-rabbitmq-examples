@@ -1,0 +1,19 @@
+#!/usr/bin/env node
+
+const amqp = require('amqplib');
+
+async function main() {
+    const queue = 'tasks';
+    try {
+        const connection = await amqp.connect('amqp://localhost'); 
+        const channel = await connection.createChannel();
+        await channel.assertQueue(queue, { durable: true });
+
+        channel.sendToQueue(queue, Buffer.from("Message from sender"), { persistent: true })
+    } catch (e) {
+        console.error(e);
+        process.exit(0);
+    }
+}
+
+main();

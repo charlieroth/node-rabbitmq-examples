@@ -1,0 +1,18 @@
+{
+  "name": "rabbit-mq-examples",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["rabbit-mq", "redis", "node-resque"],
+  "author": "Charles Roth <charlieroth4@icloud.com>",
+  "license": "MIT",
+  "dependencies": {
+    "amqplib": "^0.5.5",
+    "ioredis": "^4.16.0",
+    "node-resque": "^7.0.2",
+    "uuid": "^7.0.2"
+  }
+}
