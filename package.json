@@ -1,18 +1,26 @@
 {
-  "name": "rabbit-mq-examples",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": ["rabbit-mq", "redis", "node-resque"],
-  "author": "Charles Roth <charlieroth4@icloud.com>",
-  "license": "MIT",
-  "dependencies": {
-    "amqplib": "^0.5.5",
-    "ioredis": "^4.16.0",
-    "node-resque": "^7.0.2",
-    "uuid": "^7.0.2"
-  }
+    "name": "node-queue-example",
+    "version": "1.0.0",
+    "description": "Example using ioredis, node-resque, amqplib, pm2 to simulate a job queue",
+    "main": "index.js",
+    "scripts": {
+        "start:worker": "pm2 start ecosystem.config.yaml --only worker",
+        "start:task_creator": "pm2 start ecosystem.config.yaml --only task_creator",
+        "dev:worker": "node worker.js",
+        "dev:task_creator": "node task_creator.js"
+    },
+    "keywords": [
+        "rabbit-mq",
+        "redis",
+        "node-resque"
+    ],
+    "author": "Charles Roth <charlieroth4@icloud.com>",
+    "license": "MIT",
+    "dependencies": {
+        "amqplib": "^0.5.5",
+        "ioredis": "^4.16.0",
+        "node-resque": "^7.0.2",
+        "pm2": "^4.4.0",
+        "uuid": "^7.0.2"
+    }
 }

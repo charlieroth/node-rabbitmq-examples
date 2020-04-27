@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 const amqp = require("amqplib");
 const NR = require("node-resque");
 const IORedis = require("ioredis");
@@ -7,12 +5,35 @@ const { v4 } = require("uuid");
 
 const redis = new IORedis();
 
+// rabbitmq queue names
+const smallTasksQueue = "small-tasks";
+const mediumTaskQueue = "medium-tasks";
+const largeTaskQueue = "large-tasks";
+
+// node-resque job/queue names
+const jobNames = {
+    sendResponse: "sendResponse",
+    uploadData: "uploadData",
+    requestStatus: "requestStatus"
+};
+const queueNames = {
+    responseQueue: "responseQueue",
+    uploadQueue: "uploadQueue",
+    requestStatusQueue: "requestStatusQueue"
+};
+const requestStatuses = {
+    pending: "0",
+    success: "1",
+    failure: "-1"
+};
+
 const jobs = {
-    notifyUser: {
+    [jobNames.sendResponse]: {
         perform: async (uploadId) => {
             const result = await new Promise((resolve) => {
+                // await redis.del(`worker-queue:${uploadId}`);
                 setTimeout(() => {
-                    console.log("User notified for uploadId: ", uploadId);
+                    console.log("Response sent for uploadId: %s !!", uploadId);
                     resolve(true);
                 }, 300);
             });
@@ -20,17 +41,18 @@ const jobs = {
             return result;
         }
     },
-    getRequestIds: {
+    [jobNames.uploadData]: {
         perform: async (uploadId, numJobs) => {
             const result = await new Promise((resolve) => {
                 for (let i = 0; i < numJobs; i++) {
-                    let requestLength = 100 * (Math.floor(Math.random() * 4) + 1);
+                    // Random amount of time (ms) to retrieve requestId
+                    let requestLength = 100 * (Math.floor(Math.random() * 3) + 1);
                     setTimeout(async () => {
                         const requestId = v4();
-                        await redis.hset(`mc-worker-queue:${uploadId}`, requestId, 0);
+                        await redis.hset(`worker-queue:${uploadId}`, requestId, requestStatuses.pending);
                         await queue.enqueue(
-                            "get-request-status", 
-                            "getRequestIdStatus",
+                            queueNames.requestStatusQueue,
+                            jobNames.requestStatus,
                             [uploadId, requestId]
                         );
                     }, requestLength);
@@ -41,17 +63,20 @@ const jobs = {
             return result;
         }
     },
-    getRequestIdStatus: {
+    [jobNames.requestStatus]: {
         plugins: ["Retry"],
         pluginOptions: {
             Retry: {
                 retryLimit: 3,
-                retryDelay: 1000
+                retryDelay: 3000
             }
         },
         perform: async (uploadId, requestId) => {
             try {
+                console.log("Polling for request id: ", requestId);
+                // Random amount of time (ms) to check status of requestId
                 let requestLength = 100 * (Math.floor(Math.random() * 4) + 1);
+                // Random number to indicate whether the api call was successful or needs to be retried
                 let apiHit = Math.floor(Math.random() * 100) + 1;
                 const requestProcessed = await new Promise((resolve) => {
                     setTimeout(() => {
@@ -61,11 +86,10 @@ const jobs = {
                 });
 
                 if (requestProcessed) {
-                    await redis.hset(`mc-worker-queue:${uploadId}`, requestId, 1);
+                    await redis.hset(`worker-queue:${uploadId}`, requestId, requestStatuses.success);
                     return requestProcessed;
                 } else {
-                    throw new Error(`Request ID: ${requestId} still processing...`);
-
+                    throw new Error(`Still processing request id: ${requestId}`);
                 }
             } catch (e) {
                 console.log(e.message);
@@ -80,9 +104,9 @@ const scheduler = new NR.Scheduler(
     { 
         connection: { redis }, 
         queues: [
-            "get-mc-request-id",
-            "get-request-status",
-            "send-response-email"
+            queueNames.uploadQueue,
+            queueNames.requestStatusQueue,
+            queueNames.responseQueue
         ]
     }, 
     jobs
@@ -90,7 +114,7 @@ const scheduler = new NR.Scheduler(
 const multiWorker = new NR.MultiWorker(
     {
         connection: { redis },
-        queues: ["get-mc-request-id", "get-request-status", "send-response-email"],
+        queues: [queueNames.uploadQueue, queueNames.requestStatusQueue, queueNames.responseQueue],
         minTaskProcessors: 1,
         maxTaskProcessors: 5 
     },
@@ -98,59 +122,74 @@ const multiWorker = new NR.MultiWorker(
 );
 
 async function checkUploadCompletion(uploadId) {
-    const workerQueueHash = await redis.hgetall(`mc-worker-queue:${uploadId}`);
-    const requestStatuses = Object.values(workerQueueHash);
-    let allComplete = true;
-    for (const reqStat of requestStatuses) {
-        if (reqStat === '0') {
-            allComplete = false;
-            break;
-        }
+    console.log("Checking status of upload: ", uploadId);
+    const workerQueueHash = await redis.hgetall(`worker-queue:${uploadId}`);
+    const queueValues = Object.values(workerQueueHash);
+    if (queueValues.includes("0")) {
+        console.log(`INCOMPLETE uploadId: ${uploadId}`);
+    } else {
+        console.log(`COMPLETE uploadId: ${uploadId}`);
+        await queue.enqueue(queueNames.responseQueue, jobNames.sendResponse, uploadId);
     }
+}
+    
+multiWorker.on("reEnqueue", async (workerId, q, job, plugin) => {
+    console.log(`
+        event: reEnqueue
+        worker[${workerId}]
+        queue: ${q}
+        job.args: ${JSON.stringify(job.args)}
+        plugin: ${JSON.stringify(plugin)}
+    `);
+});
 
-    if (allComplete) {
-        await queue.enqueue("send-response-email", "notifyUser", uploadId);
+multiWorker.on("failure", async (workerId, q, job, _failure, duration) => {
+    console.log(`
+        event: failure
+        worker[${workerId}]
+        queue: ${q}
+        job.args: ${JSON.stringify(job.args)}
+        duration: (${duration}ms)
+    `);
+    if (q === queueNames.requestStatusQueue) {
+        console(`Failed to process requestId: ${job.args[1]}`);
+        redis.hset(`worker-queue:${job.args[0]}`, `${job.args[1]}`, requestStatuses.failure).then(async () => {
+            await checkUploadCompletion(job.args[0]);
+        });
     }
+});
 
-    return;
+multiWorker.on("success", async (workerId, q, job, result, duration) => {
+    console.log(`
+        event: success
+        worker[${workerId}]
+        queue: ${q}
+        job.args: ${JSON.stringify(job.args)}
+        result: ${result} 
+        duration: (${duration}ms)
+    `);
+    if (q === queueNames.requestStatusQueue) {
+        redis.hset(`worker-queue:${job.args[0]}`, `${job.args[1]}`, requestStatuses.success).then(async () => {
+            await checkUploadCompletion(job.args[0]);
+        });
+    }
+});
+
+async function startConsumer(channel, q) {
+    await channel.assertQueue(q, { durable: true });
+    console.log("[*] Waiting for messages in %s. To exit press Ctrl+c", q);
+    channel.consume(q, async (msg) => {
+        console.log("[%s] Recieved %s", q, msg.content.toString());
+        const message = JSON.parse(msg.content.toString());
+        await queue.enqueue(
+            queueNames.uploadQueue,
+            jobNames.uploadData,
+            [message.uploadId, message.numJobs]
+        );
+    }, { noAck: true });
 }
 
 async function main() {
-    multiWorker.on("reEnqueue", async (workerId, queue, job, plugin) => {
-        console.log(`
-            worker[${workerId}]
-            REENQUEUE: ${queue}
-            job.args: ${JSON.stringify(job.args)}
-            plugin: ${JSON.stringify(plugin)}
-        `);
-    });
-
-    multiWorker.on("failure", async (workerId, queue, job, _failure, duration) => {
-        console.log(`
-            worker[${workerId}]
-            job.args: ${JSON.stringify(job.args)}
-            FAILURE: ${queue} >> Failed to process requestId: ${job.args[1]}
-            (${duration}ms)
-        `);
-        if (queue === "get-request-status") {
-            await redis.hset(`mc-worker-queue:${job.args[0]}`, `${job.args[1]}`, -1);
-            await checkUploadCompletion(job.args[0]);
-        }
-    });
-
-    multiWorker.on("success", async (workerId, queue, job, result, duration) => {
-        console.log(`
-            worker[${workerId}]
-            job.args: ${JSON.stringify(job.args)}
-            SUCCESS: ${queue} >> ${result} 
-            (${duration}ms)
-        `);
-        if (queue === "get-request-status") {
-            await redis.hset(`mc-worker-queue:${job.args[0]}`, `${job.args[1]}`, 1);
-            await checkUploadCompletion(job.args[0]);
-        }
-    });
-    
     try {
         multiWorker.start();
         await scheduler.connect();
@@ -158,26 +197,56 @@ async function main() {
         await queue.connect();
         const connection = await amqp.connect("amqp://localhost");
         const channel = await connection.createChannel();
-        await channel.assertQueue("mc-tasks", { durable: true });
-        console.log("[*] Waiting for messages in  %s. To exit press Ctrl+c", "hello");
-        channel.consume("mc-tasks", async (msg) => {
-            console.log("[x] Recieved %s", msg.content.toString());
-            const message = JSON.parse(msg.content.toString());
-            await queue.enqueue(
-                "get-mc-request-id",
-                "getRequestIds", 
-                [message.uploadId, message.numJobs]
-            );
-        }, { noAck: true });
+        startConsumer(channel, smallTasksQueue);
+        startConsumer(channel, mediumTaskQueue);
+        startConsumer(channel, largeTaskQueue);
     } catch (e) {
         console.error(e);
-        process.exit(0);
+        shutdown().finally(() => process.exit(0));
     }
 }
 
-process.on("SIGNINT", async () => {
-    await multiWorker.end();
+async function shutdown() {
     await scheduler.end();
+    multiWorker.end();
+    const sts = await redis.quit();
+    if (sts === "OK") console.log("ioredis client successfully quit");
+    else console.log("ioredis client failed to quit");
+}
+
+process.on("message", (msg) => {
+    if (msg == "shutdown") {
+        console.log('Closing all connections...');
+        shutdown().finally(() => process.exit(0));
+    }
+});
+
+process.on("SIGINT", () => {
+    console.log("SIGINT triggered");
+    shutdown().finally(() => process.exit(0));
+});
+
+process.on("SIGTERM", () => {
+    console.log("SIGTERM triggered");
+    shutdown().finally(() => process.exit(1));
+});
+
+process.on("uncaughtException", (err) => {
+    console.log(`Uncaught Exception: ${err.message}`);
+    process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+    console.log("Uncaught Rejection at: ", promise, ` reason: ${reason}`);
+    process.exit(1);
+});
+
+process.on("exit", (code) => {
+    console.log("Worker exited with code: ", code);
 });
 
 main();
+
+if (typeof process.send === "function") {
+    process.send("ready");
+}
