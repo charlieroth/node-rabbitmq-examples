@@ -1,22 +1,10 @@
-app:
-  - script: node worker.js
-    name: "worker"
+apps:
+  - script: ./worker.js
+    name: 'worker'
     instances: 4
-    listen_timeout: 2000
     exec_mode: cluster
-    max_memory_restart: "150M"
+    watch: true
     env:
       NODE_ENV: development
     env_production:
       NODE_ENV: production
-  - script: node task_creator.js
-    name: "task_creator"
-    instances: 1
-    listen_timeout: 2000
-    exec_mode: cluster
-    max_memory_restart: "150M"
-    env:
-      NODE_ENV: development
-    env_production:
-      NODE_ENV: production
-
