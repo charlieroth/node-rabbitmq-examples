@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 const amqp = require("amqplib");
 const NR = require("node-resque");
 const IORedis = require("ioredis");

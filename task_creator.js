@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 const amqp = require("amqplib");
 const { v4 } = require("uuid");
 
